@@ -61,16 +61,9 @@ pipeline {
 
     post {
         always {
-            // Archive the entire html_report directory
+            // Archive the entire html_report directory (open report.html from the build's Artifacts).
+            // No HTML Publisher plugin needed: the report is self-contained.
             archiveArtifacts artifacts: 'PyTest DQ Framework/html_report/**', allowEmptyArchive: true
-            publishHTML(target: [
-                allowMissing: true,
-                alwaysLinkToLastBuild: true,
-                keepAll: true,
-                reportDir: 'PyTest DQ Framework/html_report',
-                reportFiles: 'report.html',
-                reportName: 'HTML Test Report'
-            ])
         }
     }
 }
