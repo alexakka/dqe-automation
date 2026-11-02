@@ -1,64 +1,123 @@
 ---
 name: generate-parquet-dq-tests
 description: >-
-  TODO: One or two sentences — what the skill generates, when to invoke it,
-  and what it must refuse (framework/Jenkins/conftest). Example pattern:
-  "Creates parquet_files test modules from docs/parquet-aggregated-data-mapping.md …"
+  Creates one parquet_files PyTest DQ module per dataset (smoke, completeness, count, uniqueness,
+  not-null) from docs/parquet-aggregated-data-mapping.md. Invoke by name for one dataset at a time;
+  refuses to edit framework/Jenkins/conftest or to take SQL from data_dev.
 disable-model-invocation: true
 ---
 
 # Generate Parquet DQ tests
 
-Complete this skill as **Step 2** of the PyTest DQ assignment. Read first:
+Read first: `PyTest DQ Framework/docs/test-automation-strategy.md`,
+`docs/parquet-aggregated-data-mapping.md` (the dataset definition), `docs/project-environment.md` (3NF tables and keys).
+This skill is dataset-agnostic: it holds no expected SQL for any named dataset.
 
-- `PyTest DQ Framework/docs/test-automation-strategy.md` — **§5 Skill contract**, **§6 Test design standard**
-- `docs/parquet-aggregated-data-mapping.md` — dataset definitions (expected SQL comes from here)
+## When to use
 
-**Do not** paste expected SQL for the three named datasets into this skill.  
-**Do not** instruct the agent to copy SQL from `data_dev/`.
+The user names this skill and a dataset. The framework already exists (`src/`, `tests/conftest.py` with
+`db_connection`, `parquet_reader`, `data_quality_library`; markers in `tests/pytest.ini`).
 
-When finished, every `TODO` below must be replaced. Run the **Skill review** checklist before using the skill to generate tests.
+Only output: `PyTest DQ Framework/tests/dq checks/parquet_files/test_<dataset_name>.py`.
 
-## When this skill applies
+Refuse (one sentence why) if asked to edit `src/`, `conftest.py`, `pytest.ini`, `requirements.txt` or
+`Jenkinsfile`; put several datasets in one file; or make a failing run green by changing expected SQL.
 
-TODO: When the agent should use this skill; what must already exist (framework); allowed paths; when to refuse.
+## Inputs
 
-## Inputs you must have
+- Dataset name (snake_case, same as the mapping heading) and its mapping section: target columns,
+  transformation, source column, comments (`grouping`, `not null`, rounding, format), filters.
+- Requirement id and author for the header; if not given, use `git config user.name` and a marked placeholder id, and say so.
+- If the mapping section is missing or incomplete, **stop and ask**. Never guess.
+- **Never use** `data_dev/` (queries, parquet loader), existing parquet files, earlier test output or other tests as a source for SQL.
 
-TODO: Required inputs and where mapping lives (`docs/parquet-aggregated-data-mapping.md`). What to do if mapping is missing. Forbidden sources.
+## Rules
 
-## Hard rules
-
-TODO: Numbered rules — at minimum cover file path, source vs target, mapping-only SQL, no dataset SQL in SKILL.md, library methods only, markers, not-null columns. Use TAS §5.4 as your checklist.
+1. **Source = Postgres** (`db_connection`) is the expected result; **target = Parquet** (`parquet_reader`) is the actual one. Never swap them or compare the target with itself.
+2. **Mapping-only SQL.** Only tables, joins, dimensions, measures, rounding and filters stated in the mapping. No extra `WHERE`, `UNION`, `CASE`, `DISTINCT`, `COALESCE` or sign changes.
+3. Output column aliases equal the mapping's target column names; the mapping wins over any other summary.
+4. `target_path = '/parquet_data/<dataset_name>'`, read with `include_subfolders=True`.
+5. Tests only call `DataQualityLibrary` methods: no pandas logic, no bare `assert`.
+6. All five tests, with these names: `test_check_dataset_is_not_empty`, `test_check_data_completeness`, `test_check_count`, `test_check_uniqueness`, `test_check_not_null_values`.
+7. Markers on every test: `parquet_data` and `<dataset_name>`; `smoke` only on the not-empty test.
+8. Uniqueness is checked on the **grain** (columns the mapping marks `grouping`); not-null on **all mapped output columns**.
+9. Fixtures `source_data` and `target_data` have `scope='module'`.
 
 ## Workflow
 
-TODO: Steps from mapping → SQL → module → markers. Keep it operational, not a copy of TAS prose.
+1. Read the mapping section; note grain, measures (aggregate, rounding), source tables, join keys, filters (usually none).
+2. Write the expected SQL (see below), then fill the template.
+3. Check the file against the rules; report the file, grain, measures and any ambiguity you resolved
+   (for example a table spelled differently in the ER diagram and the mapping).
 
 ## Template
 
-Paste the **full** module skeleton from TAS §6.2 (placeholders only). Align source/target with TAS, not swapped names in `test_examples.py`.
-
 ```python
-# TODO: replace with full template from TAS §6.2
+"""
+Description: Data Quality checks for <dataset_name> dataset.
+Requirement(s): <TICKET-ID>
+Author(s): <name>
+"""
+
+import pytest
+
+
+@pytest.fixture(scope='module')
+def source_data(db_connection):
+    source_query = """
+    -- expected query derived from mapping (grain + measures + joins)
+    """
+    return db_connection.get_data_sql(source_query)
+
+
+@pytest.fixture(scope='module')
+def target_data(parquet_reader):
+    target_path = '/parquet_data/<dataset_name>'
+    return parquet_reader.process(target_path, include_subfolders=True)
+
+
+@pytest.mark.parquet_data
+@pytest.mark.smoke
+@pytest.mark.<dataset_name>
+def test_check_dataset_is_not_empty(target_data, data_quality_library):
+    data_quality_library.check_dataset_is_not_empty(target_data)
+
+
+@pytest.mark.parquet_data
+@pytest.mark.<dataset_name>
+def test_check_data_completeness(source_data, target_data, data_quality_library):
+    data_quality_library.check_data_completeness(source_data, target_data)
+
+
+@pytest.mark.parquet_data
+@pytest.mark.<dataset_name>
+def test_check_count(source_data, target_data, data_quality_library):
+    data_quality_library.check_count(source_data, target_data)
+
+
+@pytest.mark.parquet_data
+@pytest.mark.<dataset_name>
+def test_check_uniqueness(target_data, data_quality_library):
+    data_quality_library.check_duplicates(target_data, ['<grouping_col_1>', '<grouping_col_2>'])
+
+
+@pytest.mark.parquet_data
+@pytest.mark.<dataset_name>
+def test_check_not_null_values(target_data, data_quality_library):
+    data_quality_library.check_not_null_values(target_data, ['<col_1>', '<col_2>', '<col_3>'])
 ```
+
+Do not copy fixture names or direction from `tests/test_examples.py`; follow this template.
 
 ## SQL derivation (generic)
 
-TODO: Generic rules only (joins, dates, names, aggregates, GROUP BY). No SQL for a specific dataset.
+1. **Joins:** join `visits` to each dimension table on `visits.<dimension>_id = <dimension>.id` (inner join) for the tables the mapping's `Source` column names.
+2. **Dimensions:** every `grouping` column is selected and listed in `GROUP BY`. A date derived from a timestamp is its date part (cast to `date`); partitioning notes describe storage, not the value.
+3. **Computed values:** build them exactly as the mapping's format comment says and repeat the expression in `GROUP BY`.
+4. **Measures:** apply the mapping's aggregate; apply the stated rounding (cast to `numeric` first if needed).
+5. **Filters:** none unless the mapping states one.
+6. **Stop.** Do not adjust the query to match parquet, a failed run or the ETL. Rules like "not null" or "can't be negative" are verified by tests, not added to the SQL.
 
 ## After generation
 
-TODO: Running pytest only if asked; do not rewrite expected SQL to force green runs.
-
----
-
-## Skill review (self-check before Step 3)
-
-Reject your own skill if any of these are true:
-
-- [ ] Contains concrete expected SQL for `facility_name_min_time_spent_per_visit_date`, `facility_type_avg_time_spent_per_visit_date`, or `patient_sum_treatment_cost_per_facility_type`
-- [ ] Tells the agent to use `data_dev/` or parquet loader SQL
-- [ ] Omits completeness, count, uniqueness, or not-null
-- [ ] Swaps Postgres vs Parquet fixtures or generates trivial always-pass checks
-- [ ] Any section still says `TODO`
+Run pytest only if asked. If a test fails, report it as a mapping-versus-parquet finding (dataset, test, expected, actual, suspected transformation cause). Never edit expected SQL, markers or the library to make a run green.
